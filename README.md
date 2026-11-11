@@ -37,7 +37,7 @@ go run main.go -url "http://127.0.0.1:8080/download-transcript/{ID}.txt" -start 
 
 ---
 
-## 🛠️ CLI Flags
+##  CLI Flags
 
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -75,7 +75,7 @@ The server listens on `http://127.0.0.1:8080` with valid transcripts at IDs `1`,
 
 ---
 
-## 🗺️ Roadmap
+##  Roadmap
 
 - [x] **v1.0**: Core CLI, `{ID}` templating, baseline health-check, dual-criteria evaluation (status + body bytes), ANSI color output.
 - [ ] **v2.0**:
@@ -88,6 +88,6 @@ The server listens on `http://127.0.0.1:8080` with valid transcripts at IDs `1`,
 
 ---
 
-## ⚖️ Disclaimer
+##  Disclaimer
 
 **This tool is designed strictly for educational, security auditing, and authorized penetration testing purposes on systems you own or have explicit written permission to test. Unauthorized access to computer systems is illegal.**
