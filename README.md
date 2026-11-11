@@ -1,4 +1,4 @@
-# The RangeFinder 🎯
+# The RangeFinder
 
 > *"I consider that our present sufferings are not worth comparing with the glory that will be revealed in us."* — Romans 8:18
 
@@ -10,7 +10,7 @@
 
 ---
 
-## ⚡ How It Works
+##  How It Works
 
 1. **Baseline Fingerprinting**: The tool first requests a known-invalid ID (`-baseline`) to establish a reference point of the target's "not found" or "forbidden" behavior (capturing status code, content length, and raw response bytes).
 2. **Range Traversal**: It iterates through your target range (`-start` to `-end`), swapping `{ID}` in the URL template on each iteration.
@@ -19,7 +19,7 @@
 
 ---
 
-## 🚀 Installation & Quick Start
+##  Installation & Quick Start
 
 ### Build from source
 
@@ -90,4 +90,4 @@ The server listens on `http://127.0.0.1:8080` with valid transcripts at IDs `1`,
 
 ## ⚖️ Disclaimer
 
-This tool is designed strictly for educational, security auditing, and authorized penetration testing purposes on systems you own or have explicit written permission to test. Unauthorized access to computer systems is illegal.
+**This tool is designed strictly for educational, security auditing, and authorized penetration testing purposes on systems you own or have explicit written permission to test. Unauthorized access to computer systems is illegal.**
