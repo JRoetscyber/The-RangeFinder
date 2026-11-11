@@ -11,6 +11,7 @@ import (
 	"time"
 	"strings"
 	"strconv"
+	"sync"
 )
 
 const (
@@ -37,12 +38,13 @@ type Baseline struct {
 	StatusCode	int
 	ContentLength int
 	Body []byte
+	SessionCookie string
 }
 
-type Request struct {
+type Target  struct {
 	Url	string
 	Id string
-	//SesionCookie string
+	SessionCookie string
 }
 
 type Result struct {
@@ -61,13 +63,22 @@ func (b Baseline) Evaluate(res Result) bool {
 	return res.StatusCode != b.StatusCode || !bytes.Equal(res.Body, b.Body) 
 }
 
-func (req Request) fetch(client *http.Client) (Result, error) {
+func (target Target) fetch(client *http.Client) (Result, error) {
 
 	maxAllowedbytes := int64(4 * MB)
 
-	resp, err := client.Get(req.Url)
+	req, err := http.NewRequest("GET", target.Url, nil)
 	if err != nil {
-		return Result{}, fmt.Errorf("unexpected error has occurred: %w", err)
+		return Result{}, fmt.Errorf("unexpected error has occurred: %w\n", err)
+	}
+
+	if target.SessionCookie != "" {
+		req.Header.Set("Cookie", target.SessionCookie)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return Result{}, fmt.Errorf("unexpected error has occurred: %w\n", err)
 	}
 
 	defer resp.Body.Close()
@@ -79,26 +90,57 @@ func (req Request) fetch(client *http.Client) (Result, error) {
 		StatusCode: resp.StatusCode,
 		Body: b,
 		ContentLength: len(b),
-		Url: req.Url,
+		Url: target.Url,
 	}, nil
+}
+
+func worker(jobs <-chan int, wg *sync.WaitGroup, urlTemplate string, cookie string, baseline Baseline, client *http.Client) {
+
+	defer wg.Done()
+
+	for i := range jobs {
+		idStr := strconv.Itoa(i)
+		targetUrl := strings.ReplaceAll(urlTemplate, "{ID}", idStr)
+		target := Target {
+			Url: targetUrl,
+			Id: idStr,
+			SessionCookie: cookie,
+		}
+
+		res, err := target.fetch(client)
+		if err != nil {											// here is where the color are used its called ANSI ecape Codes 
+			fmt.Printf("%s unexpected error has occurred:%s %s%v%s\n", Red, Reset, BoldWhite, err, Reset)
+			continue
+		}
+
+		if baseline.Evaluate(res) {									// here is where the color are used its called ANSI ecape Codes 
+			fmt.Printf("%s{Hit}%s Found ID: %d Status: %d Length: %d\n",Green, Reset, i, res.StatusCode, res.ContentLength)
+		}
+	}
 }
 
 func main() {
 	url := flag.String("url", "", "Target URL template (e.g. https://target.com/user/{ID})")
+	sessionCookie := flag.String("cookie", "", "Session Cookie (e.g. session=ZZjPhwBbonLVK3kiSHlI7mUWoN94GQjg)")
 	start := flag.Int("start", 1, "Starting ID")
 	end := flag.Int("end", 100, "Ending ID")
+	workers := flag.Int("workers", 2, "Concurrency")
 	baselineID := flag.String("baseline", "999999", "Known invalid ID for baseline")
 	verbose := flag.Bool("v", false, "Enable verbose output")
 	_ = verbose
 
 	flag.Parse()
 
+	var wg sync.WaitGroup
+	jobs := make(chan int)
+
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	baseUrl := strings.ReplaceAll(*url, "{ID}", *baselineID)
-	baseReq := Request{
+	baseReq := Target {
 		Url: baseUrl,
 		Id: *baselineID,
+		SessionCookie: *sessionCookie,
 	}
 
 	res, err := baseReq.fetch(client)
@@ -113,21 +155,15 @@ func main() {
 		Body: res.Body,
 	}
 
-	for i := *start; i <= *end; i++ {
-		idStr := strconv.Itoa(i)
-		targetUrl := strings.ReplaceAll(*url, "{ID}", idStr)
-		req := Request{
-			Url: targetUrl,
-			Id: idStr,
-		}
-
-		res, err = req.fetch(client)
-		if err != nil {											// here is where the color are used its called ANSI ecape Codes 
-			fmt.Printf("%s unexpected error has occurred:%s %s%v%s\n", Red, Reset, BoldWhite, err, Reset)
-		}
-
-		if baseline.Evaluate(res) {									// here is where the color are used its called ANSI ecape Codes 
-			fmt.Printf("%s{Hit}%s Found ID: %d Status: %d Length: %d\n",Green, Reset, i, res.StatusCode, res.ContentLength)
-		}
+	for w := 0; w < *workers; w++ {
+		wg.Add(1)
+		go worker(jobs, &wg, *url, *sessionCookie, baseline, client)
 	}
+
+	for i := *start; i <= *end; i++ {
+		jobs <- i
+	}
+	close(jobs)
+
+	wg.Wait()
 }
