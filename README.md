@@ -49,7 +49,7 @@ go run main.go -url "http://127.0.0.1:8080/download-transcript/{ID}.txt" -start 
 
 ---
 
-## 📋 Example Output
+##  Example Output
 
 ```text
 {Hit} Found ID: 1 Status: 200 Length: 60
@@ -60,7 +60,7 @@ go run main.go -url "http://127.0.0.1:8080/download-transcript/{ID}.txt" -start 
 
 ---
 
-## 🧪 Included Mock Server
+##  Included Mock Server
 
 A built-in test laboratory replicating real-world IDOR scenarios (e.g. PortSwigger Web Security Academy chat transcript labs) is included under `mock_server/`.
 
