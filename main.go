@@ -54,6 +54,36 @@ type Result struct {
 	Url string
 }
 
+type Limiter struct {
+	Mu sync.Mutex
+	LastRequest	time.Time
+	Interval time.Duration
+}
+
+func NewLimiter(rps int) *Limiter {
+	interval := time.Second / time.Duration(rps)
+	return &Limiter{
+		Interval: interval,
+	}
+}
+
+func (l *Limiter) wait() {
+	l.Mu.Lock()
+	wait := l.Interval - time.Since(l.LastRequest)
+
+	if wait > 0 {
+		l.LastRequest = time.Now().Add(wait)
+	} else {
+		l.LastRequest = time.Now()
+	}
+
+	l.Mu.Unlock()
+
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+}
+
 func (b Baseline) Evaluate(res Result) bool {
 	/* this is a new thing i learned Golang idiomatic style bool instead of 
 	if res.StatusCode != b.StatusCode || res.ContentLength != b.ContentLength {
@@ -63,7 +93,7 @@ func (b Baseline) Evaluate(res Result) bool {
 	return res.StatusCode != b.StatusCode || !bytes.Equal(res.Body, b.Body) 
 }
 
-func (target Target) fetch(client *http.Client) (Result, error) {
+func (target Target) Fetch(client *http.Client) (Result, error) {
 
 	maxAllowedbytes := int64(4 * MB)
 
@@ -94,7 +124,7 @@ func (target Target) fetch(client *http.Client) (Result, error) {
 	}, nil
 }
 
-func worker(jobs <-chan int, wg *sync.WaitGroup, urlTemplate string, cookie string, baseline Baseline, client *http.Client) {
+func worker(jobs <-chan int, wg *sync.WaitGroup, urlTemplate string, cookie string, baseline Baseline, client *http.Client, limiter *Limiter) {
 
 	defer wg.Done()
 
@@ -107,7 +137,9 @@ func worker(jobs <-chan int, wg *sync.WaitGroup, urlTemplate string, cookie stri
 			SessionCookie: cookie,
 		}
 
-		res, err := target.fetch(client)
+		limiter.wait() 
+
+		res, err := target.Fetch(client)
 		if err != nil {											// here is where the color are used its called ANSI ecape Codes 
 			fmt.Printf("%s unexpected error has occurred:%s %s%v%s\n", Red, Reset, BoldWhite, err, Reset)
 			continue
@@ -127,9 +159,12 @@ func main() {
 	workers := flag.Int("workers", 2, "Concurrency")
 	baselineID := flag.String("baseline", "999999", "Known invalid ID for baseline")
 	verbose := flag.Bool("v", false, "Enable verbose output")
+	rps := flag.Int("rps", 10, "Requests per second limit")
 	_ = verbose
 
 	flag.Parse()
+
+	limiter := NewLimiter(*rps)
 
 	var wg sync.WaitGroup
 	jobs := make(chan int)
@@ -143,7 +178,7 @@ func main() {
 		SessionCookie: *sessionCookie,
 	}
 
-	res, err := baseReq.fetch(client)
+	res, err := baseReq.Fetch(client)
 	if err != nil {											// here is where the color are used its called ANSI ecape Codes 
 		fmt.Printf("%s unexpected error has occurred:%s %s%v%s\n", Red, Reset, BoldWhite, err, Reset)
 		return 
@@ -157,7 +192,7 @@ func main() {
 
 	for w := 0; w < *workers; w++ {
 		wg.Add(1)
-		go worker(jobs, &wg, *url, *sessionCookie, baseline, client)
+		go worker(jobs, &wg, *url, *sessionCookie, baseline, client, limiter)
 	}
 
 	for i := *start; i <= *end; i++ {
@@ -167,3 +202,4 @@ func main() {
 
 	wg.Wait()
 }
+
