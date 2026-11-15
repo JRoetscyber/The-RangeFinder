@@ -55,35 +55,62 @@ type Result struct {
 }
 
 type Limiter struct {
-	Mu sync.Mutex
-	LastRequest	time.Time
-	Interval time.Duration
+	Mu                  sync.Mutex
+	LastRequest         time.Time
+	Interval            time.Duration
+	BaseInterval        time.Duration
+	GoodStatusCodeCount int
+	WaitDuration        time.Duration
 }
 
 func NewLimiter(rps int) *Limiter {
 	interval := time.Second / time.Duration(rps)
 	return &Limiter{
 		Interval: interval,
+		BaseInterval: interval,
 	}
 }
 
-func (l *Limiter) wait() {
+func (l *Limiter) wait(statusCode int) {
+	sleepTime := l.nextDelay(statusCode)
+	if sleepTime > 0 {
+		time.Sleep(sleepTime)
+	}
+}
+
+func (l *Limiter) nextDelay(statusCode int) time.Duration {
 	l.Mu.Lock()
-	wait := l.Interval - time.Since(l.LastRequest)
+	defer l.Mu.Unlock()
 
-	if wait > 0 {
-		l.LastRequest = time.Now().Add(wait)
+	if statusCode != 429 && statusCode != 503 {
+		l.GoodStatusCodeCount++
+
+		// Only shrink interval after a few consecutive successes (optional)
+		if l.GoodStatusCodeCount >= 5 && l.Interval > l.BaseInterval {
+			l.Interval = time.Duration(float64(l.Interval) / 1.189)
+			if l.Interval < l.BaseInterval {
+				l.Interval = l.BaseInterval
+			}
+		}
 	} else {
-		l.LastRequest = time.Now()
+		l.GoodStatusCodeCount = 0
+		l.Interval *= 2
+		// Consider adding a l.MaxInterval cap here so it doesn't grow infinitely
 	}
 
-	l.Mu.Unlock()
+	now := time.Now()
+	nextSlot := l.LastRequest.Add(l.Interval)
 
-	if wait > 0 {
-		time.Sleep(wait)
+	if nextSlot.After(now) {
+		l.LastRequest = nextSlot
+		l.WaitDuration = nextSlot.Sub(now)
+	} else {
+		l.LastRequest = now
+		l.WaitDuration = 0
 	}
+
+	return l.WaitDuration
 }
-
 func (b Baseline) Evaluate(res Result) bool {
 	/* this is a new thing i learned Golang idiomatic style bool instead of 
 	if res.StatusCode != b.StatusCode || res.ContentLength != b.ContentLength {
@@ -127,6 +154,7 @@ func (target Target) Fetch(client *http.Client) (Result, error) {
 func worker(jobs <-chan int, wg *sync.WaitGroup, urlTemplate string, cookie string, baseline Baseline, client *http.Client, limiter *Limiter) {
 
 	defer wg.Done()
+	var lastStatus int
 
 	for i := range jobs {
 		idStr := strconv.Itoa(i)
@@ -137,13 +165,14 @@ func worker(jobs <-chan int, wg *sync.WaitGroup, urlTemplate string, cookie stri
 			SessionCookie: cookie,
 		}
 
-		limiter.wait() 
+		limiter.wait(lastStatus) 
 
 		res, err := target.Fetch(client)
 		if err != nil {											// here is where the color are used its called ANSI ecape Codes 
 			fmt.Printf("%s unexpected error has occurred:%s %s%v%s\n", Red, Reset, BoldWhite, err, Reset)
 			continue
 		}
+		lastStatus = res.StatusCode
 
 		if baseline.Evaluate(res) {									// here is where the color are used its called ANSI ecape Codes 
 			fmt.Printf("%s{Hit}%s Found ID: %d Status: %d Length: %d\n",Green, Reset, i, res.StatusCode, res.ContentLength)
