@@ -12,6 +12,9 @@ import (
 	"strings"
 	"strconv"
 	"sync"
+	"os"
+	"bufio"
+	"encoding/json"
 )
 
 const (
@@ -63,6 +66,13 @@ type Limiter struct {
 	WaitDuration        time.Duration
 }
 
+type Hit struct {
+	Id string `json:"id"`
+	StatusCode int `json:"status_code"`
+	ContentLength int `json:"content_length"`
+	Url string `json:"url"`
+}
+
 func NewLimiter(rps int) *Limiter {
 	interval := time.Second / time.Duration(rps)
 	return &Limiter{
@@ -111,6 +121,7 @@ func (l *Limiter) nextDelay(statusCode int) time.Duration {
 
 	return l.WaitDuration
 }
+
 func (b Baseline) Evaluate(res Result) bool {
 	/* this is a new thing i learned Golang idiomatic style bool instead of 
 	if res.StatusCode != b.StatusCode || res.ContentLength != b.ContentLength {
@@ -151,13 +162,12 @@ func (target Target) Fetch(client *http.Client) (Result, error) {
 	}, nil
 }
 
-func worker(jobs <-chan int, wg *sync.WaitGroup, urlTemplate string, cookie string, baseline Baseline, client *http.Client, limiter *Limiter) {
+func worker(jobs <-chan string, results chan<- Hit, wg *sync.WaitGroup, urlTemplate string, cookie string, baseline Baseline, client *http.Client, limiter *Limiter) {
 
 	defer wg.Done()
 	var lastStatus int
 
-	for i := range jobs {
-		idStr := strconv.Itoa(i)
+	for idStr := range jobs {
 		targetUrl := strings.ReplaceAll(urlTemplate, "{ID}", idStr)
 		target := Target {
 			Url: targetUrl,
@@ -175,7 +185,16 @@ func worker(jobs <-chan int, wg *sync.WaitGroup, urlTemplate string, cookie stri
 		lastStatus = res.StatusCode
 
 		if baseline.Evaluate(res) {									// here is where the color are used its called ANSI ecape Codes 
-			fmt.Printf("%s{Hit}%s Found ID: %d Status: %d Length: %d\n",Green, Reset, i, res.StatusCode, res.ContentLength)
+			fmt.Printf("%s{Hit}%s Found ID: %s Status: %d Length: %d\n",Green, Reset, idStr, res.StatusCode, res.ContentLength)
+
+			if results != nil {
+				results <- Hit{
+					Id: idStr,
+					StatusCode: res.StatusCode,
+					ContentLength: res.ContentLength,
+					Url: target.Url,
+				}
+			}
 		}
 	}
 }
@@ -189,6 +208,8 @@ func main() {
 	baselineID := flag.String("baseline", "999999", "Known invalid ID for baseline")
 	verbose := flag.Bool("v", false, "Enable verbose output")
 	rps := flag.Int("rps", 10, "Requests per second limit")
+	wordlist := flag.String("wordlist", "", "Path to wordlist file (optional)")
+	outFile := flag.String("out", "", "Output file path (e.g. results.jsonl)")
 	_ = verbose
 
 	flag.Parse()
@@ -196,7 +217,11 @@ func main() {
 	limiter := NewLimiter(*rps)
 
 	var wg sync.WaitGroup
-	jobs := make(chan int)
+	var file *os.File 
+	var scribeWg sync.WaitGroup
+	var results chan Hit
+
+	jobs := make(chan string)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
@@ -219,16 +244,61 @@ func main() {
 		Body: res.Body,
 	}
 
+	if *outFile != "" {
+		f, err := os.Create(*outFile)
+		if err != nil {
+			fmt.Printf("Failed to create output file: %v\n", err)
+			return
+		}
+		defer f.Close()
+		file = f
+		
+
+		results = make(chan Hit)
+		scribeWg.Add(1)
+		go func() {
+			defer scribeWg.Done()
+			encoder := json.NewEncoder(file)
+			for hit := range results {
+					encoder.Encode(hit)
+			}
+		}()
+	}
+
 	for w := 0; w < *workers; w++ {
 		wg.Add(1)
-		go worker(jobs, &wg, *url, *sessionCookie, baseline, client, limiter)
+		go worker(jobs,results, &wg, *url, *sessionCookie, baseline, client, limiter)
 	}
 
-	for i := *start; i <= *end; i++ {
-		jobs <- i
+	if *wordlist != "" {
+		wlFile, err := os.Open(*wordlist)
+		if err != nil {
+			fmt.Printf("failed to open wordlist: %v\n", err)
+			return
+		}
+
+		scanner := bufio.NewScanner(wlFile)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" {
+				jobs <- line
+			}
+		}
+		defer wlFile.Close()
+	} else {
+		for i := *start; i <= *end; i++ {
+			jobs <- strconv.Itoa(i)
+		}
 	}
+
+
+
 	close(jobs)
-
 	wg.Wait()
+	
+	if results != nil {
+		close(results)
+		scribeWg.Wait()
+	}
 }
 
